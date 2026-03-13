@@ -137,18 +137,23 @@ Response (ApiKeyResponse[]): [{
 DELETE /api/v1/apps/{app_id}/api-keys/{key_id}
 Response: 204 No Content
 
+POST /api/v1/apps/{app_id}/destinations/{id}/test
+Request: { test_payload?: object }  // Optional test payload, defaults to sample webhook
+Response: {
+  success: boolean,
+  response_time_ms: number,
+  status_code?: number,
+  error?: string
+}
+
 Implementation:
 - New model methods in hookflow.models/app.py (ApiKey model already exists)
 - Service: ApiKeyService for create/list/revoke operations
 - API key generation: secrets.token_urlsafe(32)
 - Hash storage: hashlib.sha256(key.encode()).hexdigest() for key_hash field
 - **last_used_at Update:** Middleware updates this field on successful API key validation.
-  Add auth middleware in hookflow/api/dependencies.py that updates ApiKey.last_used_at
+  Create hookflow/api/dependencies.py with auth middleware that updates ApiKey.last_used_at
   on each authenticated request.
-- New model methods in hookflow.models/app.py (ApiKey model already exists)
-- Service: ApiKeyService for create/list/revoke operations
-- API key generation: secrets.token_urlsafe(32)
-- Hash storage: hashlib.sha256(key.encode()).hexdigest() for key_hash field
 ```
 
 #### Real-time Status (SSE)
@@ -173,8 +178,11 @@ Events:
 Implementation:
 - Library: sse-starlette for FastAPI SSE support
 - Architecture: Redis pub/sub for production, in-memory broadcaster for dev
-- Service: EventBroadcaster with publish/subscribe methods
-- Publisher: delivery worker publishes events on completion
+- New service class: hookflow/services/event_broadcaster.py with:
+  - EventBroadcaster base class with publish/subscribe methods
+  - RedisEventBroadcaster using Redis pub/sub
+  - InMemoryEventBroadcaster using asyncio queues (dev only)
+- Publisher: delivery worker publishes events on completion via broadcaster.publish()
 - Frontend: EventSource hook in components/dashboard/event-stream.tsx
 - Reconnection: Auto-reconnect with exponential backoff:
   - Initial delay: 1 second
@@ -370,15 +378,14 @@ CREATE INDEX IF NOT EXISTS idx_{table_name}_created_at ON {table_name}(created_a
 ```
 
 **OAuth2 Flow (Security Fix):**
-1. Google Cloud credentials stored as ENV VAR: `GOOGLE_CLOUD_CREDENTIALS_PATH`
-2. Credentials file loaded server-side at startup, never exposed to users
-3. OAuth flow completed server-side using service account credentials
-4. Refresh token stored encrypted at rest (Fernet encryption)
-5. Token auto-refreshed on expiration
-6. Users only provide spreadsheet_id and sheet_name in destination config
+1. Google Cloud Service Account credentials stored as ENV VAR: `GOOGLE_CLOUD_CREDENTIALS_PATH`
+2. Service account JSON loaded server-side at startup, never exposed to users
+3. Uses server-to-server auth with private key (no refresh token needed)
+4. Access tokens auto-generated per request, expire after 1 hour
+5. Users only provide spreadsheet_id and sheet_name in destination config
 
 **NOTE:** No admin UI required. Google credentials are system-level configuration,
-not per-destination. Users cannot provide their own OAuth credentials for security.
+not per-destination. Uses service account auth (not user OAuth) for simplicity.
 
 **Implementation:**
 - Google Sheets API v4 using `google-api-python-client`
@@ -527,6 +534,15 @@ CREATE INDEX idx_subscriptions_status ON subscriptions(status);
 
 **Strategy:** Use Alembic for all schema changes
 
+**Prerequisite:** Alembic must be initialized in the project before migrations:
+```bash
+cd backend
+pip install alembic
+alembic init alembic
+# Edit alembic.ini to set database URL
+# Edit alembic/env.py to use SQLAlchemy AsyncSession
+```
+
 **Commands:**
 ```bash
 # Create migration
@@ -538,6 +554,8 @@ alembic upgrade head
 # Rollback if needed
 alembic downgrade -1
 ```
+
+**Note:** PostgreSQL is required for analytics features (uses date_trunc, JSONB).
 
 ---
 
@@ -649,6 +667,12 @@ services:
 
 ## Implementation Priority
 
+**Prerequisites:**
+- Initialize Alembic for database migrations
+- Create backend/hookflow/scripts directory for migration scripts
+- Create backend/hookflow/api/dependencies.py for auth middleware
+
+**Phase 2:**
 1. **Phase 2a:** Dashboard pages (all routes above)
 2. **Phase 2b:** Analytics API + frontend charts
 3. **Phase 2c:** API key management
@@ -701,3 +725,6 @@ services:
 - Follow existing code patterns and conventions
 - Webhook receive endpoint: `/api/v1/webhook/{app_id}` (public URL)
 - Management API endpoints: `/api/v1/...` (protected after Phase 5)
+- **Timezone handling:** Use `datetime.now(timezone.utc)` for all new code
+- **Phase 2 Auth:** Dashboard is unauthenticated during Phase 2. Basic auth placeholder
+  or demo mode. Full multi-tenant auth comes in Phase 5 with Clerk.
