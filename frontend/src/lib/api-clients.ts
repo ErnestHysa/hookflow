@@ -23,6 +23,39 @@ export interface Delivery {
   created_at: string;
 }
 
+export interface FailedDelivery {
+  id: string;
+  webhook_id: string;
+  destination_id: string;
+  destination_name: string;
+  destination_type: string;
+  attempt_number: number;
+  status: string;
+  error_message?: string;
+  response_status_code?: number;
+  response_time_ms?: number;
+  retry_after?: string;
+  created_at: string;
+  webhook?: {
+    id: string;
+    body?: Record<string, unknown>;
+    headers?: Record<string, string>;
+  };
+}
+
+export interface DLQResponse {
+  items: FailedDelivery[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface DLQStats {
+  total_failed: number;
+  by_status: Record<string, number>;
+  top_errors: Array<{ error: string; count: number }>;
+}
+
 export interface Analytics {
   total_webhooks: number;
   success_rate: number;
@@ -135,5 +168,29 @@ export const api = {
   revokeApiKey: (appId: string, keyId: string) =>
     apiRequest(`/apps/${appId}/api-keys/${keyId}`, {
       method: "DELETE",
+    }),
+
+  // Dead Letter Queue (Failed Deliveries)
+  getFailedDeliveries: (appId: string, limit = 100, offset = 0, status?: string) =>
+    apiRequest(`/apps/${appId}/dlq?limit=${limit}&offset=${offset}${status ? `&status=${status}` : ""}`),
+  getDLQStats: (appId: string) =>
+    apiRequest(`/apps/${appId}/dlq/stats`),
+  replayFailedDelivery: (deliveryId: string) =>
+    apiRequest(`/dlq/${deliveryId}/replay`, {
+      method: "POST",
+    }),
+  deleteFailedDelivery: (deliveryId: string) =>
+    apiRequest(`/dlq/${deliveryId}`, {
+      method: "DELETE",
+    }),
+  bulkReplayFailedDeliveries: (appId: string, deliveryIds: string[]) =>
+    apiRequest(`/apps/${appId}/dlq/bulk-replay`, {
+      method: "POST",
+      body: JSON.stringify(deliveryIds),
+    }),
+  bulkDeleteFailedDeliveries: (appId: string, deliveryIds: string[]) =>
+    apiRequest(`/apps/${appId}/dlq/bulk-delete`, {
+      method: "POST",
+      body: JSON.stringify(deliveryIds),
     }),
 };
