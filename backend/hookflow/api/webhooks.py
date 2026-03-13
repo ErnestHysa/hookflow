@@ -452,3 +452,63 @@ async def list_destinations(
         )
         for d in destinations
     ]
+
+
+@router.post(
+    "/apps/{app_id}/destinations/{destination_id}/test",
+    summary="Test a destination",
+    tags=["destinations"],
+)
+async def test_destination(
+    app_id: str,
+    destination_id: str,
+    test_payload: dict | None = None,
+    service: WebhookService = Depends(get_webhook_service),
+):
+    """
+    Test a destination with a sample webhook payload.
+
+    Sends a test webhook to the destination and returns the result.
+    """
+    from hookflow.models import Destination, Webhook, WebhookStatus
+
+    # Get destination
+    result = await service.db.execute(
+        select(Destination).where(
+            Destination.id == destination_id,
+            Destination.app_id == app_id,
+        )
+    )
+    destination = result.scalar_one_or_none()
+
+    if not destination:
+        raise HTTPException(status_code=404, detail="Destination not found")
+
+    # Create test webhook
+    test_webhook = Webhook(
+        app_id=app_id,
+        body=test_payload or {"event": "test", "message": "This is a test webhook"},
+        headers={"user-agent": "HookFlow-Test"},
+        content_type="application/json",
+        status=WebhookStatus.PROCESSING,
+    )
+
+    import time
+    start = time.time()
+
+    try:
+        result = await service._deliver_to_destination(test_webhook, destination)
+        elapsed = (time.time() - start) * 1000
+
+        return {
+            "success": True,
+            "response_time_ms": int(elapsed),
+            "status_code": result.get("status_code"),
+        }
+    except Exception as e:
+        elapsed = (time.time() - start) * 1000
+        return {
+            "success": False,
+            "response_time_ms": int(elapsed),
+            "error": str(e),
+        }
