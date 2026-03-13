@@ -75,6 +75,10 @@ class User(Base, UUIDMixin, TimestampMixin):
     # Subscription
     plan_tier: Mapped[PlanTier] = mapped_column(String(20), default=PlanTier.FREE)
 
+    # Stripe integration
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     # Status
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -194,6 +198,7 @@ class DestinationType(str, Enum):
     DATABASE = "database"
     SLACK = "slack"
     DISCORD = "discord"
+    TELEGRAM = "telegram"
     EMAIL = "email"
     NOTION = "notion"
     AIRTABLE = "airtable"
@@ -217,6 +222,12 @@ class Destination(Base, UUIDMixin, TimestampMixin):
 
     # Transformation rules
     transform_rules: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Retry configuration
+    retry_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    max_retries: Mapped[int] = mapped_column(Integer, default=3)
+    retry_backoff_base_ms: Mapped[int] = mapped_column(Integer, default=1000)  # 1 second
+    retry_backoff_max_ms: Mapped[int] = mapped_column(Integer, default=60000)  # 60 seconds
 
     # Status
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

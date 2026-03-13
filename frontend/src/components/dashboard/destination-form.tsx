@@ -29,7 +29,12 @@ const destinationTypes = [
   { value: "http", label: "HTTP Webhook", description: "Send to any HTTP endpoint" },
   { value: "slack", label: "Slack", description: "Send to Slack webhook" },
   { value: "discord", label: "Discord", description: "Send to Discord webhook" },
-  { value: "database", label: "Database", description: "Store in PostgreSQL database" },
+  { value: "telegram", label: "Telegram", description: "Send to Telegram bot" },
+  { value: "database", label: "Database", description: "Store in database table" },
+  { value: "email", label: "Email", description: "Send via email" },
+  { value: "notion", label: "Notion", description: "Create Notion database page" },
+  { value: "airtable", label: "Airtable", description: "Create Airtable record" },
+  { value: "google_sheets", label: "Google Sheets", description: "Append to spreadsheet" },
 ]
 
 export function DestinationForm({ appId, onClose, onSubmit }: DestinationFormProps) {
@@ -92,36 +97,177 @@ export function DestinationForm({ appId, onClose, onSubmit }: DestinationFormPro
             />
           </div>
         )
-      case "database":
+      case "telegram":
         return (
           <div className="space-y-4">
             <div>
-              <Label htmlFor="host">Database Host</Label>
+              <Label htmlFor="bot_token">Bot Token</Label>
               <Input
-                id="host"
-                placeholder="localhost:5432"
-                value={config.host || ""}
-                onChange={(e) => setConfig({ ...config, host: e.target.value })}
+                id="bot_token"
+                type="text"
+                placeholder="123456:ABC-DEF1234..."
+                value={config.bot_token || ""}
+                onChange={(e) => setConfig({ ...config, bot_token: e.target.value })}
+                required
               />
             </div>
             <div>
-              <Label htmlFor="dbname">Database Name</Label>
+              <Label htmlFor="chat_id">Chat ID</Label>
               <Input
-                id="dbname"
-                placeholder="webhooks"
-                value={config.dbname || ""}
-                onChange={(e) => setConfig({ ...config, dbname: e.target.value })}
+                id="chat_id"
+                type="text"
+                placeholder="@channel or 123456789"
+                value={config.chat_id || ""}
+                onChange={(e) => setConfig({ ...config, chat_id: e.target.value })}
+                required
+              />
+            </div>
+          </div>
+        )
+      case "database":
+        return (
+          <div>
+            <Label htmlFor="table_name">Table Name</Label>
+            <Input
+              id="table_name"
+              type="text"
+              placeholder="webhooks (default: webhooks_{app_id})"
+              value={config.table_name || ""}
+              onChange={(e) => setConfig({ ...config, table_name: e.target.value })}
+            />
+          </div>
+        )
+      case "email":
+        return (
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="provider">Provider</Label>
+              <Select value={config.provider || "smtp"} onValueChange={(v) => setConfig({ ...config, provider: v })}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="smtp">SMTP</SelectItem>
+                  <SelectItem value="sendgrid">SendGrid</SelectItem>
+                  <SelectItem value="ses">AWS SES</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="to">To Email</Label>
+              <Input
+                id="to"
+                type="email"
+                placeholder="recipient@example.com"
+                value={config.to || ""}
+                onChange={(e) => setConfig({ ...config, to: e.target.value })}
+                required
               />
             </div>
             <div>
-              <Label htmlFor="table">Table Name</Label>
+              <Label htmlFor="subject">Subject</Label>
               <Input
-                id="table"
-                placeholder="events"
-                value={config.table || ""}
-                onChange={(e) => setConfig({ ...config, table: e.target.value })}
+                id="subject"
+                type="text"
+                placeholder="New webhook notification"
+                value={config.subject || ""}
+                onChange={(e) => setConfig({ ...config, subject: e.target.value })}
               />
             </div>
+          </div>
+        )
+      case "notion":
+        return (
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="api_key">API Key</Label>
+              <Input
+                id="api_key"
+                type="password"
+                placeholder="secret_..."
+                value={config.api_key || ""}
+                onChange={(e) => setConfig({ ...config, api_key: e.target.value })}
+                required
+              />
+            </div>
+            <div>
+              <Label htmlFor="database_id">Database ID</Label>
+              <Input
+                id="database_id"
+                type="text"
+                placeholder="32-character ID from Notion URL"
+                value={config.database_id || ""}
+                onChange={(e) => setConfig({ ...config, database_id: e.target.value })}
+                required
+              />
+            </div>
+          </div>
+        )
+      case "airtable":
+        return (
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="access_token">Access Token</Label>
+              <Input
+                id="access_token"
+                type="password"
+                placeholder="pat..."
+                value={config.access_token || ""}
+                onChange={(e) => setConfig({ ...config, access_token: e.target.value })}
+                required
+              />
+            </div>
+            <div>
+              <Label htmlFor="base_id">Base ID</Label>
+              <Input
+                id="base_id"
+                type="text"
+                placeholder="app..."
+                value={config.base_id || ""}
+                onChange={(e) => setConfig({ ...config, base_id: e.target.value })}
+                required
+              />
+            </div>
+            <div>
+              <Label htmlFor="table_id">Table ID</Label>
+              <Input
+                id="table_id"
+                type="text"
+                placeholder="tbl..."
+                value={config.table_id || ""}
+                onChange={(e) => setConfig({ ...config, table_id: e.target.value })}
+                required
+              />
+            </div>
+          </div>
+        )
+      case "google_sheets":
+        return (
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="spreadsheet_id">Spreadsheet ID</Label>
+              <Input
+                id="spreadsheet_id"
+                type="text"
+                placeholder="1Bxi... (from URL)"
+                value={config.spreadsheet_id || ""}
+                onChange={(e) => setConfig({ ...config, spreadsheet_id: e.target.value })}
+                required
+              />
+            </div>
+            <div>
+              <Label htmlFor="sheet_name">Sheet Name (optional)</Label>
+              <Input
+                id="sheet_name"
+                type="text"
+                placeholder="Sheet1"
+                value={config.sheet_name || ""}
+                onChange={(e) => setConfig({ ...config, sheet_name: e.target.value })}
+              />
+            </div>
+            <p className="text-xs text-gray-500">
+              Uses Google service account configured server-side
+            </p>
           </div>
         )
       default:

@@ -2,11 +2,10 @@
 
 from datetime import datetime, timedelta
 from sqlalchemy import case, cast, func, select
-from sqlalchemy.dialects.postgresql import date_trunc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.types import Float
 
-from hookflow.models import Delivery, DeliveryStatus, Destination, Webhook
+from hookflow.models.app import Delivery, Destination, Webhook
 from hookflow.schemas.analytics import AnalyticsResponse
 
 
@@ -58,7 +57,7 @@ class AnalyticsService:
             .select_from(Webhook)
             .where(Webhook.app_id == app_id)
             .where(Webhook.created_at >= start_time)
-            .where(Webhook.status == WebhookStatus.COMPLETED)
+            .where(Webhook.status == "completed")
         )
         completed = completed_result.scalar() or 0
         success_rate = (completed / total_webhooks * 100) if total_webhooks > 0 else 0
@@ -120,7 +119,7 @@ class AnalyticsService:
                 func.count(Delivery.id).label("count"),
                 func.sum(
                     case(
-                        (Delivery.status == DeliveryStatus.SUCCESS, 1),
+                        (Delivery.status == "success", 1),
                         else_=0,
                     )
                 )

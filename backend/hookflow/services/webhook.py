@@ -22,6 +22,11 @@ from hookflow.core.queue import queue_client
 from hookflow.models import App, Delivery, Destination, Webhook
 from hookflow.schemas import WebhookStatus
 from hookflow.services.event_broadcaster import get_broadcaster
+from hookflow.utils.retry import (
+    RetryPolicy,
+    calculate_backoff_with_retry_after,
+    is_retryable_error,
+)
 
 
 class WebhookService:
@@ -154,8 +159,19 @@ class WebhookService:
         if not delivery:
             raise ValueError("No pending delivery found")
 
+        # Create retry policy from destination config
+        retry_policy = RetryPolicy(
+            enabled=destination.retry_enabled,
+            max_retries=destination.max_retries,
+            base_ms=destination.retry_backoff_base_ms,
+            max_ms=destination.retry_backoff_max_ms,
+        )
+
         # Deliver based on type
         broadcaster = get_broadcaster()
+        status_code = None
+        exception_type = None
+
         try:
             result = await self._deliver_to_destination(webhook, destination)
             delivery.status = "success"
@@ -176,6 +192,8 @@ class WebhookService:
                 },
             )
         except Exception as e:
+            status_code = getattr(e, "status_code", None)
+            exception_type = type(e).__name__
             delivery.status = "failed"
             delivery.error_message = str(e)
 
@@ -193,11 +211,21 @@ class WebhookService:
             )
 
             # Schedule retry if applicable
-            if delivery.attempt_number < settings.webhook_max_retries:
-                delivery.status = "retrying"
-                delay = settings.webhook_retry_delay * (2 ** (delivery.attempt_number - 1))
-                delivery.retry_after = datetime.utcnow() + timedelta(seconds=delay)
-                await self._enqueue_retry(webhook_id, destination_id, delay)
+            if retry_policy.is_retryable_error(status_code, exception_type):
+                if retry_policy.should_retry(delivery.attempt_number):
+                    delivery.status = "retrying"
+                    delivery.retry_after = retry_policy.calculate_next_retry(
+                        delivery.attempt_number,
+                        retry_after_header=None,  # Could extract from response headers
+                    )
+                    await self._enqueue_retry(
+                        webhook_id,
+                        destination_id,
+                        delivery.retry_after,
+                    )
+                else:
+                    # Max retries exceeded, mark as permanently failed
+                    delivery.status = "failed"
 
         await self.db.commit()
         await self.db.refresh(delivery)
@@ -405,18 +433,21 @@ class WebhookService:
         self,
         webhook_id: str,
         destination_id: str,
-        delay_seconds: int,
+        retry_after: datetime,
     ) -> None:
-        """Enqueue delivery for retry."""
-        # For in-memory queue, just enqueue immediately with retry info
-        # In production with Redis, would use sorted set for scheduling
+        """Enqueue delivery for retry at a specific time."""
+        # Calculate delay in seconds for the queue
+        delay_seconds = max(0, int((retry_after - datetime.utcnow()).total_seconds()))
+
         await queue_client.enqueue(
             "webhook:retry",
             {
                 "webhook_id": str(webhook_id),
                 "destination_id": str(destination_id),
-                "retry_after": (datetime.utcnow() + timedelta(seconds=delay_seconds)).isoformat(),
+                "retry_after": retry_after.isoformat(),
+                "delay_seconds": delay_seconds,
             },
+            delay=delay_seconds,
         )
 
     @retry(
@@ -438,6 +469,16 @@ class WebhookService:
             return await self._deliver_discord(webhook, destination)
         elif destination.type == "telegram":
             return await self._deliver_telegram(webhook, destination)
+        elif destination.type == "database":
+            return await self._deliver_database(webhook, destination)
+        elif destination.type == "email":
+            return await self._deliver_email(webhook, destination)
+        elif destination.type == "notion":
+            return await self._deliver_notion(webhook, destination)
+        elif destination.type == "airtable":
+            return await self._deliver_airtable(webhook, destination)
+        elif destination.type == "google_sheets":
+            return await self._deliver_google_sheets(webhook, destination)
         else:
             raise ValueError(f"Unsupported destination type: {destination.type}")
 
@@ -625,6 +666,92 @@ class WebhookService:
             "response_time_ms": int(elapsed),
         }
 
+    async def _deliver_database(
+        self,
+        webhook: Webhook,
+        destination: Destination,
+    ) -> dict[str, Any]:
+        """Deliver webhook to a database table."""
+        from hookflow.integrations.database import deliver_database
+
+        result = await deliver_database(webhook, destination, self.db)
+        return {"status_code": 200, "body": str(result), "response_time_ms": 0}
+
+    async def _deliver_email(
+        self,
+        webhook: Webhook,
+        destination: Destination,
+    ) -> dict[str, Any]:
+        """Deliver webhook via email."""
+        from hookflow.integrations.email import deliver_email
+
+        app = await self._get_app(webhook.app_id)
+        app_name = app.name if app else "HookFlow"
+
+        result = await deliver_email(webhook, destination, app_name)
+        return {"status_code": 200, "body": str(result), "response_time_ms": 0}
+
+    async def _deliver_notion(
+        self,
+        webhook: Webhook,
+        destination: Destination,
+    ) -> dict[str, Any]:
+        """Deliver webhook to Notion database."""
+        from hookflow.integrations.notion import deliver_notion
+        import httpx
+        import time
+
+        async with httpx.AsyncClient(timeout=settings.webhook_timeout) as client:
+            start = time.time()
+            result = await deliver_notion(webhook, destination, client)
+            elapsed = (time.time() - start) * 1000
+
+        return {
+            "status_code": 200,
+            "body": str(result),
+            "response_time_ms": int(elapsed),
+        }
+
+    async def _deliver_airtable(
+        self,
+        webhook: Webhook,
+        destination: Destination,
+    ) -> dict[str, Any]:
+        """Deliver webhook to Airtable table."""
+        from hookflow.integrations.airtable import deliver_airtable
+        import httpx
+        import time
+
+        async with httpx.AsyncClient(timeout=settings.webhook_timeout) as client:
+            start = time.time()
+            result = await deliver_airtable(webhook, destination, client)
+            elapsed = (time.time() - start) * 1000
+
+        return {
+            "status_code": 200,
+            "body": str(result),
+            "response_time_ms": int(elapsed),
+        }
+
+    async def _deliver_google_sheets(
+        self,
+        webhook: Webhook,
+        destination: Destination,
+    ) -> dict[str, Any]:
+        """Deliver webhook to Google Sheets."""
+        from hookflow.integrations.google_sheets import deliver_google_sheets
+        import time
+
+        start = time.time()
+        result = await deliver_google_sheets(webhook, destination)
+        elapsed = (time.time() - start) * 1000
+
+        return {
+            "status_code": 200,
+            "body": str(result),
+            "response_time_ms": int(elapsed),
+        }
+
     def _apply_transform(self, body: dict[str, Any], rules: dict[str, Any]) -> dict[str, Any]:
         """Apply transformation rules to webhook body."""
 
@@ -688,21 +815,37 @@ class WebhookService:
         if not webhook:
             return
 
-        # Get all deliveries
+        # Get all deliveries with their destinations
         result = await self.db.execute(
-            select(Delivery).where(Delivery.webhook_id == webhook_id)
+            select(Delivery)
+            .where(Delivery.webhook_id == webhook_id)
         )
         deliveries = list(result.scalars().all())
 
         if not deliveries:
             return
 
-        # Check if all are complete (success or failed after max retries)
-        all_complete = all(
-            d.status == "success"
-            or (d.status == "failed" and d.attempt_number >= settings.webhook_max_retries)
-            for d in deliveries
-        )
+        # Check if each delivery is complete
+        all_complete = True
+        for delivery in deliveries:
+            if delivery.status == "success":
+                continue
+
+            # Get destination to check max retries
+            dest_result = await self.db.execute(
+                select(Destination).where(Destination.id == delivery.destination_id)
+            )
+            destination = dest_result.scalar_one_or_none()
+
+            max_retries = destination.max_retries if destination else 3
+
+            # Complete if: success, or failed after max retries
+            if delivery.status == "failed" and delivery.attempt_number >= max_retries + 1:
+                continue
+
+            # Still pending or retrying
+            all_complete = False
+            break
 
         if all_complete:
             webhook.status = WebhookStatus.COMPLETED

@@ -15,7 +15,7 @@ from hookflow.models.base import Base
 # Import all models so they're registered with Base.metadata
 from hookflow.models.app import (
     App, User, Webhook, Delivery, Destination, ApiKey,
-    PlanTier, WebhookStatus, DeliveryStatus, DestinationType,
+    PlanTier, DeliveryStatus, DestinationType,
 )
 
 # this is the Alembic Config object, which provides

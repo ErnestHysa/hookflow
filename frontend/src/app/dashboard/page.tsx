@@ -1,15 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Webhook, Activity, Target, TrendingUp } from "lucide-react";
+import Link from "next/link";
+import { Webhook, Activity, Target, TrendingUp, Settings, CreditCard, Plus } from "lucide-react";
 import { api, type Analytics } from "@/lib/api-clients";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { WebhookChart } from "@/components/charts/webhook-chart";
 import { StatusDonut } from "@/components/charts/status-donut";
 
+interface SubscriptionStatus {
+  plan_tier: string;
+  status: string;
+}
+
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
+  const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
   const [error, setError] = useState("");
 
   // For now, just show the first app's analytics
@@ -17,11 +24,22 @@ export default function DashboardPage() {
   useEffect(() => {
     async function loadAnalytics() {
       try {
-        const apps = await api.getApps();
+        const [apps, subResponse] = await Promise.all([
+          api.getApps(),
+          fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/auth/subscription`, {
+            credentials: "include",
+          }).catch(() => null),
+        ]);
+
         if (apps.length > 0) {
           const appId = (apps[0] as { id: string }).id;
           const data = await api.getAnalytics(appId, "7d");
           setAnalytics(data);
+        }
+
+        if (subResponse && subResponse.ok) {
+          const sub = await subResponse.json();
+          setSubscription(sub);
         }
       } catch (err) {
         console.error("Failed to load analytics:", err);
@@ -79,8 +97,33 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="bg-white border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center">
-          <h1 className="text-xl font-semibold">Dashboard</h1>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-6">
+            <h1 className="text-xl font-semibold">Dashboard</h1>
+            {subscription && (
+              <div className="flex items-center gap-2 px-3 py-1 bg-slate-100 rounded-full text-sm">
+                <CreditCard className="w-3 h-3" />
+                <span className="capitalize">{subscription.plan_tier}</span>
+                {subscription.status === "past_due" && (
+                  <span className="text-yellow-600">(Payment Due)</span>
+                )}
+              </div>
+            )}
+          </div>
+          <nav className="flex items-center gap-4">
+            <Link
+              href="/pricing"
+              className="text-sm text-blue-600 hover:underline"
+            >
+              Upgrade
+            </Link>
+            <Link
+              href="/dashboard/settings"
+              className="text-sm text-gray-600 hover:text-gray-900"
+            >
+              <Settings className="w-4 h-4 inline" />
+            </Link>
+          </nav>
         </div>
       </header>
 

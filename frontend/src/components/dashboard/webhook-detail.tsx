@@ -1,5 +1,6 @@
 import { type Webhook, type Delivery } from "@/lib/api-clients";
 import { JsonViewer } from "@/components/ui/json-viewer";
+import { DeliveryTimeline } from "@/components/dashboard/delivery-timeline";
 
 interface WebhookDetailProps {
   webhook: Webhook;

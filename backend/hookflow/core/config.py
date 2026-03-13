@@ -60,6 +60,16 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]
 
+    # Clerk Authentication
+    clerk_secret_key: str | None = Field(default=None)
+    clerk_webhook_secret: str | None = Field(default=None)
+    clerk_frontend_api: str | None = Field(default=None)
+
+    # Stripe Billing
+    stripe_secret_key: str | None = Field(default=None)
+    stripe_webhook_secret: str | None = Field(default=None)
+    stripe_publishable_key: str | None = Field(default=None)
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def parse_cors_origins(cls, v: str | list[str]) -> list[str]:

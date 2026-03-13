@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Copy, Plus } from "lucide-react";
+import { Copy, Plus, Settings } from "lucide-react";
 import { api, type App, type Analytics, type Webhook } from "@/lib/api-clients";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { WebhookTable } from "@/components/dashboard/webhook-table";
@@ -61,6 +61,13 @@ export default function AppDetailPage() {
             >
               <Plus className="w-4 h-4" />
               Add Destination
+            </button>
+            <button
+              onClick={() => router.push(`/dashboard/app/${appId}/settings`)}
+              className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50 flex items-center gap-1"
+            >
+              <Settings className="w-4 h-4" />
+              Settings
             </button>
           </div>
         </div>

@@ -14,10 +14,11 @@ from hookflow.api import webhooks_router
 from hookflow.api.analytics import router as analytics_router
 from hookflow.api.api_keys import router as api_keys_router
 from hookflow.api.events import router as events_router
+from hookflow.api.v1.auth import router as auth_router
 from hookflow.core.config import settings
 from hookflow.core.database import close_db, init_db
 from hookflow.core.queue import queue_client
-from hookflow.workers import start_worker, stop_worker
+from hookflow.workers import start_retry_worker, stop_retry_worker, start_worker, stop_worker
 
 # Metrics
 webhook_received = Counter(
@@ -59,10 +60,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_db()
     print("Database initialized")
 
-    # Start background worker
+    # Start background workers
     print("Starting delivery worker...")
     await start_worker()
-    print("Delivery worker start call completed")
+    print("Delivery worker started")
+
+    print("Starting retry worker...")
+    await start_retry_worker()
+    print("Retry worker started")
 
     print("HookFlow ready!")
 
@@ -71,6 +76,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Shutdown
     print("Shutting down HookFlow...")
     await stop_worker()
+    await stop_retry_worker()
     await queue_client.disconnect()
     await close_db()
     print("HookFlow stopped")
@@ -121,6 +127,7 @@ app.include_router(webhooks_router, prefix=settings.api_prefix)
 app.include_router(analytics_router, prefix=settings.api_prefix)
 app.include_router(api_keys_router, prefix=settings.api_prefix)
 app.include_router(events_router, prefix=settings.api_prefix)
+app.include_router(auth_router, prefix=settings.api_prefix)
 
 
 # Exception handlers

@@ -24,6 +24,7 @@ class DestinationType(str, Enum):
     DATABASE = "database"
     SLACK = "slack"
     DISCORD = "discord"
+    TELEGRAM = "telegram"
     EMAIL = "email"
     NOTION = "notion"
     AIRTABLE = "airtable"
