@@ -27,6 +27,12 @@ from hookflow.utils.retry import (
     calculate_backoff_with_retry_after,
     is_retryable_error,
 )
+from hookflow.utils.signature import (
+    verify_signature_from_headers,
+    WebhookSignatureError,
+    generate_signature_headers,
+)
+from hookflow.services.rate_limit import RateLimitService, RateLimitExceededError
 
 
 class WebhookService:
@@ -49,14 +55,28 @@ class WebhookService:
         if not app:
             raise ValueError(f"App {app_id} not found")
 
-        # Check rate limit
-        await self._check_rate_limit(app)
+        # Check rate limit and increment counter
+        rate_limit_service = RateLimitService(self.db)
+        try:
+            await rate_limit_service.check_and_increment(app_id, count=1)
+        except RateLimitExceededError as e:
+            # Convert to ValueError for consistency with existing error handling
+            raise ValueError(
+                f"Rate limit exceeded: {e.detail['current']}/{e.detail['limit']}. "
+                f"Resets at {e.detail['reset_at']}"
+            )
 
         # Verify signature if enabled
-        if app.verify_signature:
-            signature = headers.get("x-webhook-signature", "")
-            if not self._verify_signature(body, signature, app.webhook_secret):
-                raise ValueError("Invalid webhook signature")
+        if app.verify_signature and app.webhook_secret:
+            try:
+                payload = json.dumps(body)
+                verify_signature_from_headers(
+                    payload,
+                    headers,
+                    app.webhook_secret,
+                )
+            except WebhookSignatureError as e:
+                raise ValueError(f"Invalid webhook signature: {e}")
 
         # Check idempotency
         idempotency_key = headers.get("x-idempotency-key")
@@ -97,10 +117,6 @@ class WebhookService:
 
         # Enqueue for processing
         await self._enqueue_webhook(webhook.id, app_id)
-
-        # Update app counter
-        app.current_month_count += 1
-        await self.db.commit()
 
         return webhook
 
@@ -398,19 +414,6 @@ class WebhookService:
         # Constant-time comparison
         return hmac.compare_digest(received_hash, expected_hash)
 
-    async def _check_rate_limit(self, app: App) -> None:
-        """Check if app is within rate limit."""
-
-        key = f"ratelimit:{app.id}:{datetime.utcnow().strftime('%Y-%m')}"
-        allowed, current = await queue_client.incr_limit(
-            key=key,
-            limit=app.monthly_limit,
-            window=60 * 60 * 24 * 30,  # 30 days
-        )
-
-        if not allowed:
-            raise ValueError(f"Rate limit exceeded: {current}/{app.monthly_limit}")
-
     async def _enqueue_webhook(self, webhook_id: str, app_id: str) -> None:
         """Enqueue webhook for processing."""
         await queue_client.enqueue(
@@ -496,12 +499,25 @@ class WebhookService:
         if not url:
             raise ValueError("HTTP destination missing URL")
 
+        # Get custom headers from destination config
         headers = destination.config.get("headers", {})
 
         # Apply transformation rules if present
         body = webhook.body
         if destination.transform_rules:
             body = self._apply_transform(body, destination.transform_rules)
+
+        # Add webhook signature headers
+        app = await self._get_app(webhook.app_id)
+        if app and app.webhook_secret and app.verify_signature:
+            payload = json.dumps(body)
+            signature_headers = generate_signature_headers(
+                payload,
+                app.webhook_secret,
+            )
+            # Merge signature headers with custom headers
+            # Signature headers should not override custom headers
+            headers = {**signature_headers, **headers}
 
         start = time.time()
         async with httpx.AsyncClient(timeout=settings.webhook_timeout) as client:
@@ -753,9 +769,48 @@ class WebhookService:
         }
 
     def _apply_transform(self, body: dict[str, Any], rules: dict[str, Any]) -> dict[str, Any]:
-        """Apply transformation rules to webhook body."""
+        """Apply transformation rules to webhook body.
+
+        Supported transformation rules:
+        - events: Filter by event type (skip if not matching)
+        - filter_values: Filter based on field values (conditional filtering)
+        - extract: Extract specific fields using JSONPath-like syntax
+        - filter: Keep only specified keys
+        - remove: Remove specific fields
+        - flatten: Flatten nested structures
+        - rename: Rename fields
+        - add: Add static fields
+        - map: Map field values through a lookup table
+        - cast: Cast field values to different types
+
+        Processing order:
+        1. events (event type filtering)
+        2. filter_values (conditional filtering)
+        3. extract (field extraction)
+        4. filter/remove (key filtering)
+        5. flatten (structure flattening)
+        6. rename (field renaming)
+        7. map (value mapping)
+        8. cast (type casting)
+        9. add (add static fields)
+        """
 
         result = body.copy()
+
+        # Event type filtering - skip transformation if event doesn't match
+        if "events" in rules:
+            allowed_events = rules["events"]
+            if isinstance(allowed_events, list):
+                event_type = self._extract_jsonpath(body, "event") or self._extract_jsonpath(body, "type")
+                if event_type not in allowed_events:
+                    # Return empty dict to signal that this webhook should be skipped
+                    return {}
+
+        # Conditional filtering based on field values (check original body)
+        if "filter_values" in rules:
+            if not self._matches_filter_values(body, rules["filter_values"]):
+                # Webhook doesn't match filter conditions, skip it
+                return {}
 
         # JSONPath extraction
         if "extract" in rules:
@@ -765,11 +820,18 @@ class WebhookService:
                 for key, path in extract.items():
                     result[key] = self._extract_jsonpath(body, path)
 
-        # Filtering
+        # Key filtering (keep only specified keys)
         if "filter" in rules:
             keep = rules["filter"]
             if isinstance(keep, list):
                 result = {k: v for k, v in result.items() if k in keep}
+
+        # Remove specific fields
+        if "remove" in rules:
+            remove_fields = rules["remove"]
+            if isinstance(remove_fields, list):
+                for field in remove_fields:
+                    result.pop(field, None)
 
         # Flattening
         if "flatten" in rules and rules["flatten"]:
@@ -781,19 +843,209 @@ class WebhookService:
                 if old_key in result:
                     result[new_key] = result.pop(old_key)
 
+        # Value mapping
+        if "map" in rules:
+            for field, mapping in rules["map"].items():
+                if field in result and isinstance(mapping, dict):
+                    original_value = result[field]
+                    if original_value in mapping:
+                        result[field] = mapping[original_value]
+
+        # Type casting
+        if "cast" in rules:
+            for field, target_type in rules["cast"].items():
+                if field in result:
+                    result[field] = self._cast_value(result[field], target_type)
+
+        # Add static fields (last, so they can't be affected by other transforms)
+        if "add" in rules:
+            add_fields = rules["add"]
+            if isinstance(add_fields, dict):
+                for key, value in add_fields.items():
+                    result[key] = value
+
         return result
 
+    def _matches_filter_values(self, data: dict[str, Any], filters: dict[str, Any]) -> bool:
+        """Check if data matches all filter conditions.
+
+        Args:
+            data: The data to check
+            filters: Dictionary of field -> expected value or condition
+                     Conditions can be:
+                     - Simple value: matches if data[field] == value
+                     - Dict with operators: {"$eq": value}, {"$ne": value},
+                       {"$in": [values]}, {"$nin": [values]},
+                       {"$exists": bool}, {"$gt": number}, {"$lt": number}
+
+        Returns:
+            True if all filters match
+        """
+        for field, condition in filters.items():
+            value = self._extract_jsonpath(data, field)
+
+            if isinstance(condition, dict):
+                # Operator-based condition
+                for op, expected in condition.items():
+                    if op == "$eq":
+                        if value != expected:
+                            return False
+                    elif op == "$ne":
+                        if value == expected:
+                            return False
+                    elif op == "$in":
+                        if value not in expected:
+                            return False
+                    elif op == "$nin":
+                        if value in expected:
+                            return False
+                    elif op == "$exists":
+                        if (value is None) == expected:
+                            return False
+                    elif op == "$gt":
+                        try:
+                            if float(value) <= float(expected):
+                                return False
+                        except (TypeError, ValueError):
+                            return False
+                    elif op == "$lt":
+                        try:
+                            if float(value) >= float(expected):
+                                return False
+                        except (TypeError, ValueError):
+                            return False
+                    elif op == "$gte":
+                        try:
+                            if float(value) < float(expected):
+                                return False
+                        except (TypeError, ValueError):
+                            return False
+                    elif op == "$lte":
+                        try:
+                            if float(value) > float(expected):
+                                return False
+                        except (TypeError, ValueError):
+                            return False
+                    elif op == "$contains":
+                        if expected not in str(value):
+                            return False
+                    elif op == "$regex":
+                        import re
+                        if not re.match(expected, str(value)):
+                            return False
+            else:
+                # Simple equality check
+                if value != condition:
+                    return False
+
+        return True
+
+    def _cast_value(self, value: Any, target_type: str) -> Any:
+        """Cast a value to the specified type.
+
+        Args:
+            value: The value to cast
+            target_type: The target type (string, int, float, bool, json)
+
+        Returns:
+            The casted value
+        """
+        if value is None:
+            return None
+
+        try:
+            if target_type == "string":
+                return str(value)
+            elif target_type == "int":
+                return int(float(value)) if isinstance(value, str) else int(value)
+            elif target_type == "float":
+                return float(value)
+            elif target_type == "bool":
+                if isinstance(value, str):
+                    return value.lower() in ("true", "1", "yes", "on")
+                return bool(value)
+            elif target_type == "json":
+                if isinstance(value, str):
+                    import json
+                    return json.loads(value)
+                return value
+            else:
+                return value
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return value
+
     def _extract_jsonpath(self, data: dict[str, Any], path: str) -> Any:
-        """Extract value using JSONPath-like syntax."""
+        """Extract value using JSONPath-like syntax.
+
+        Supports:
+        - Dot notation: "user.name"
+        - Array access: "items.0" or "items[0]"
+        - Wildcards: "users.*.name" (gets first match)
+
+        Args:
+            data: The data to extract from
+            path: The JSONPath-like expression
+
+        Returns:
+            The extracted value or None if not found
+        """
+        if not data or not path:
+            return None
+
+        # Handle array notation [index]
+        path = path.replace("[", ".").replace("]", "")
+
         keys = path.split(".")
         result = data
-        for key in keys:
+
+        i = 0
+        while i < len(keys):
+            key = keys[i]
+            if not key:
+                i += 1
+                continue
+
+            if result is None:
+                return None
+
             if isinstance(result, dict):
                 result = result.get(key)
-            elif isinstance(result, list) and key.isdigit():
-                result = result[int(key)]
+                i += 1
+            elif isinstance(result, list):
+                if key == "*":
+                    # Wildcard for array
+                    # Check if the next key exists (e.g., "users.*.name")
+                    if i + 1 < len(keys):
+                        next_key = keys[i + 1]
+                        # For each item in the array, get the next_key value
+                        # Return the first non-null match
+                        for item in result:
+                            if isinstance(item, dict) and next_key in item:
+                                result = item.get(next_key)
+                                i += 2  # Skip both * and the next key
+                                break
+                        else:
+                            return None
+                    else:
+                        # Just *, return the first item
+                        result = result[0] if result else None
+                        i += 1
+                elif key.isdigit():
+                    idx = int(key)
+                    result = result[idx] if 0 <= idx < len(result) else None
+                    i += 1
+                else:
+                    # Access property on array items - return first matching value
+                    for item in result:
+                        if isinstance(item, dict) and key in item:
+                            result = item.get(key)
+                            break
+                    else:
+                        return None
+                    i += 1
             else:
                 return None
+
         return result
 
     def _flatten_dict(self, data: dict[str, Any], parent_key: str = "", sep: str = ".") -> dict[str, Any]:

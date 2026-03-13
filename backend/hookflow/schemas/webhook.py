@@ -105,6 +105,55 @@ class WebhookReplay(BaseModel):
     )
 
 
+class BatchWebhookItem(BaseModel):
+    """A single webhook in a batch request."""
+
+    id: str | None = Field(
+        None,
+        description="Optional client-provided ID for this webhook (for tracking in response)",
+    )
+    body: dict = Field(..., description="Webhook payload")
+    idempotency_key: str | None = Field(
+        None,
+        description="Optional idempotency key for deduplication",
+    )
+
+
+class BatchWebhookRequest(BaseModel):
+    """Batch webhook request."""
+
+    webhooks: list[BatchWebhookItem] = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="List of webhooks to process (max 100 per batch)",
+    )
+    parallel: bool = Field(
+        default=True,
+        description="Process webhooks in parallel (default) or sequentially",
+    )
+
+
+class BatchWebhookItemResponse(BaseModel):
+    """Response for a single webhook in a batch."""
+
+    index: int
+    id: str | None
+    client_id: str | None
+    status: str
+    webhook_id: str | None
+    error: str | None
+
+
+class BatchWebhookResponse(BaseModel):
+    """Batch webhook response."""
+
+    success_count: int
+    failure_count: int
+    total_count: int
+    items: list[BatchWebhookItemResponse]
+
+
 # Response schemas
 
 
