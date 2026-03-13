@@ -11,6 +11,7 @@ from prometheus_client import Counter, Histogram, generate_latest
 from starlette.responses import Response
 
 from hookflow.api import webhooks_router
+from hookflow.api.analytics import router as analytics_router
 from hookflow.core.config import settings
 from hookflow.core.database import close_db, init_db
 from hookflow.core.queue import queue_client
@@ -115,6 +116,7 @@ async def metrics() -> Response:
 
 # Include routers
 app.include_router(webhooks_router, prefix=settings.api_prefix)
+app.include_router(analytics_router, prefix=settings.api_prefix)
 
 
 # Exception handlers
