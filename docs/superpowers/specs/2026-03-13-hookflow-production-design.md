@@ -89,7 +89,7 @@ Transform HookFlow from MVP to production-ready SaaS platform through three sequ
 
 #### Analytics
 ```
-GET /api/v1/analytics/{app_id}
+GET /api/v1/apps/{app_id}/analytics
 Query Params: ?period=24h|7d|30d
 
 Response:
@@ -142,6 +142,13 @@ Implementation:
 - Service: ApiKeyService for create/list/revoke operations
 - API key generation: secrets.token_urlsafe(32)
 - Hash storage: hashlib.sha256(key.encode()).hexdigest() for key_hash field
+- **last_used_at Update:** Middleware updates this field on successful API key validation.
+  Add auth middleware in hookflow/api/dependencies.py that updates ApiKey.last_used_at
+  on each authenticated request.
+- New model methods in hookflow.models/app.py (ApiKey model already exists)
+- Service: ApiKeyService for create/list/revoke operations
+- API key generation: secrets.token_urlsafe(32)
+- Hash storage: hashlib.sha256(key.encode()).hexdigest() for key_hash field
 ```
 
 #### Real-time Status (SSE)
@@ -169,7 +176,11 @@ Implementation:
 - Service: EventBroadcaster with publish/subscribe methods
 - Publisher: delivery worker publishes events on completion
 - Frontend: EventSource hook in components/dashboard/event-stream.tsx
-- Reconnection: Auto-reconnect with exponential backoff on connection loss
+- Reconnection: Auto-reconnect with exponential backoff:
+  - Initial delay: 1 second
+  - Multiplier: 1.5x
+  - Max delay: 30 seconds
+  - Max retries: unlimited (reconnects until explicitly closed)
 ```
 
 ### 2.3 Frontend Components to Create
@@ -232,6 +243,9 @@ CREATE INDEX IF NOT EXISTS idx_{table_name}_created_at ON {table_name}(created_a
 ```
 - Inserts webhook payload as JSONB for queryability
 - Follows same retry logic as HTTP destinations
+- **Schema Evolution Strategy:** JSONB storage allows flexible schema without migrations.
+  New fields are automatically stored. Deleted fields have no impact.
+  The raw body column preserves complete original JSON for debugging.
 
 ### 3.2 Email Integration
 
@@ -356,11 +370,15 @@ CREATE INDEX IF NOT EXISTS idx_{table_name}_created_at ON {table_name}(created_a
 ```
 
 **OAuth2 Flow (Security Fix):**
-1. User enters Google Cloud credentials JSON in admin UI
-2. Credentials stored ENCRYPTED at rest (Fernet encryption)
-3. OAuth flow completed server-side, refresh_token stored securely
-4. Token auto-refreshed on expiration
-5. Never expose raw credentials in destination config
+1. Google Cloud credentials stored as ENV VAR: `GOOGLE_CLOUD_CREDENTIALS_PATH`
+2. Credentials file loaded server-side at startup, never exposed to users
+3. OAuth flow completed server-side using service account credentials
+4. Refresh token stored encrypted at rest (Fernet encryption)
+5. Token auto-refreshed on expiration
+6. Users only provide spreadsheet_id and sheet_name in destination config
+
+**NOTE:** No admin UI required. Google credentials are system-level configuration,
+not per-destination. Users cannot provide their own OAuth credentials for security.
 
 **Implementation:**
 - Google Sheets API v4 using `google-api-python-client`
@@ -391,6 +409,16 @@ All integration deliveries follow the same error handling pattern:
 - Existing `apps.user_id` values will be migrated to Clerk user IDs
 - New users go through Clerk sign-up flow
 - **Action required:** Users will need to re-authenticate via Clerk on first migration login
+
+**Clerk Migration Process:**
+1. Pre-migration: Add `clerk_user_id` column to apps table (nullable initially)
+2. Run migration script: `/backend/hookflow/scripts/migrate_to_clerk.py`
+   - Creates mapping table: old_user_id -> clerk_user_id
+   - Updates apps.user_id in batches of 1000
+   - Logs all migrations for audit trail
+3. Keep old User table for 30 days for rollback capability
+4. Send email notification to all users about re-authentication
+5. Post-migration: Remove password_hash from User model (kept for 30-day rollback window)
 
 **Setup:**
 1. Install `@clerk/nextjs`
