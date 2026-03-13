@@ -21,6 +21,7 @@ from hookflow.core.config import settings
 from hookflow.core.queue import queue_client
 from hookflow.models import App, Delivery, Destination, Webhook
 from hookflow.schemas import WebhookStatus
+from hookflow.services.event_broadcaster import get_broadcaster
 
 
 class WebhookService:
@@ -74,6 +75,20 @@ class WebhookService:
         self.db.add(webhook)
         await self.db.commit()
         await self.db.refresh(webhook)
+
+        # Publish webhook received event
+        broadcaster = get_broadcaster()
+        await broadcaster.publish(
+            f"app:{app_id}",
+            {
+                "type": "webhook.received",
+                "data": {
+                    "webhook_id": str(webhook.id),
+                    "status": webhook.status,
+                    "timestamp": webhook.created_at.isoformat(),
+                },
+            },
+        )
 
         # Enqueue for processing
         await self._enqueue_webhook(webhook.id, app_id)
@@ -140,15 +155,42 @@ class WebhookService:
             raise ValueError("No pending delivery found")
 
         # Deliver based on type
+        broadcaster = get_broadcaster()
         try:
             result = await self._deliver_to_destination(webhook, destination)
             delivery.status = "success"
             delivery.response_status_code = result.get("status_code", 200)
             delivery.response_body = result.get("body", "")[:1000]
             delivery.response_time_ms = result.get("response_time_ms", 0)
+
+            # Publish delivery success event
+            await broadcaster.publish(
+                f"app:{webhook.app_id}",
+                {
+                    "type": "delivery.success",
+                    "data": {
+                        "webhook_id": str(webhook_id),
+                        "destination_id": str(destination_id),
+                        "response_time_ms": result.get("response_time_ms", 0),
+                    },
+                },
+            )
         except Exception as e:
             delivery.status = "failed"
             delivery.error_message = str(e)
+
+            # Publish delivery failed event
+            await broadcaster.publish(
+                f"app:{webhook.app_id}",
+                {
+                    "type": "delivery.failed",
+                    "data": {
+                        "webhook_id": str(webhook_id),
+                        "destination_id": str(destination_id),
+                        "error": str(e),
+                    },
+                },
+            )
 
             # Schedule retry if applicable
             if delivery.attempt_number < settings.webhook_max_retries:
@@ -394,6 +436,8 @@ class WebhookService:
             return await self._deliver_slack(webhook, destination)
         elif destination.type == "discord":
             return await self._deliver_discord(webhook, destination)
+        elif destination.type == "telegram":
+            return await self._deliver_telegram(webhook, destination)
         else:
             raise ValueError(f"Unsupported destination type: {destination.type}")
 
@@ -506,6 +550,66 @@ class WebhookService:
                     "timestamp": webhook.created_at.isoformat(),
                 }
             ]
+        }
+
+        start = time.time()
+        async with httpx.AsyncClient(timeout=settings.webhook_timeout) as client:
+            response = await client.post(url, json=payload)
+        elapsed = (time.time() - start) * 1000
+
+        response.raise_for_status()
+
+        return {
+            "status_code": response.status_code,
+            "body": response.text[:1000],
+            "response_time_ms": int(elapsed),
+        }
+
+    async def _deliver_telegram(
+        self,
+        webhook: Webhook,
+        destination: Destination,
+    ) -> dict[str, Any]:
+        """Deliver webhook to Telegram via Bot API."""
+
+        import httpx
+        import time
+
+        bot_token = destination.config.get("bot_token")
+        chat_id = destination.config.get("chat_id")
+
+        if not bot_token or not chat_id:
+            raise ValueError("Telegram destination missing bot_token or chat_id")
+
+        # Format message for Telegram
+        # Telegram messages have a 4096 character limit
+        message = f"🔔 *Webhook Received*\n\n"
+        message += f"📌 *App ID:* `{webhook.app_id[:8]}...`\n"
+        message += f"🆔 *Webhook ID:* `{str(webhook.id)[:8]}...`\n"
+        message += f"⏰ *Time:* {webhook.created_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
+
+        # Add event type if present
+        body = webhook.body or {}
+        if isinstance(body, dict):
+            if "event" in body:
+                message += f"📦 *Event:* `{body.get('event')}`\n"
+            # Add a preview of the payload
+            message += f"\n📄 *Payload Preview:*\n"
+            message += "```json\n"
+            payload_str = json.dumps(body, ensure_ascii=False)[:500]
+            message += payload_str
+            if len(json.dumps(body, ensure_ascii=False)) > 500:
+                message += "..."
+            message += "\n```"
+
+        # Telegram Bot API URL
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+
+        payload = {
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True,
         }
 
         start = time.time()
