@@ -15,6 +15,7 @@ from hookflow.api.analytics import router as analytics_router
 from hookflow.api.api_keys import router as api_keys_router
 from hookflow.api.events import router as events_router
 from hookflow.api.v1.auth import router as auth_router
+from hookflow.api.v1.users import router as users_router
 from hookflow.core.config import settings
 from hookflow.core.database import close_db, init_db
 from hookflow.core.queue import queue_client
@@ -86,10 +87,96 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description="Reliable webhook infrastructure for everyone",
+    description="""
+## HookFlow - Webhook-as-a-Service Platform
+
+Reliable webhook infrastructure for everyone.
+
+### Features
+
+- **Reliable Delivery**: Automatic retries with exponential backoff
+- **Dead Letter Queue**: View and manage failed deliveries
+- **Event Transformation**: Filter, extract, and transform webhook payloads
+- **Rate Limiting**: Per-app monthly limits with configurable quotas
+- **Real-time Events**: Server-Sent Events for live delivery updates
+- **Multiple Destinations**: HTTP, Slack, Discord, Telegram, Email, Database, Notion, Airtable, Google Sheets
+
+### Authentication
+
+API requests are authenticated using API keys. Include your API key in the `X-API-Key` header.
+
+```bash
+curl -H "X-API-Key: your-api-key" https://api.hookflow.dev/api/v1/apps
+```
+
+### Rate Limiting
+
+Each app has a monthly webhook limit. When the limit is exceeded, webhooks will return a `429 Too Many Requests` response.
+
+Rate limit information is included in response headers:
+- `X-RateLimit-Limit`: Your monthly limit
+- `X-RateLimit-Remaining`: Remaining webhooks this month
+- `X-RateLimit-Reset`: Unix timestamp when the limit resets
+
+### Webhook Signature
+
+HookFlow signs all outgoing webhook deliveries using HMAC SHA256. The signature is included in the `X-Webhook-Signature` header.
+
+Format: `t={timestamp},v1={signature}`
+
+### Status Codes
+
+- `200 OK`: Successful request
+- `201 Created`: Resource created successfully
+- `202 Accepted`: Webhook accepted for processing
+- `400 Bad Request`: Invalid request parameters
+- `401 Unauthorized`: Missing or invalid API key
+- `403 Forbidden`: Access denied
+- `404 Not Found`: Resource not found
+- `429 Too Many Requests`: Rate limit exceeded
+- `500 Internal Server Error`: Server error
+
+### Support
+
+For help, visit [docs.hookflow.dev](https://docs.hookflow.dev) or email support@hookflow.dev
+    """,
     docs_url="/docs" if settings.is_development else None,
     redoc_url="/redoc" if settings.is_development else None,
     lifespan=lifespan,
+    tags=[
+        {
+            "name": "webhooks",
+            "description": "Webhook receiving, processing, and management",
+        },
+        {
+            "name": "apps",
+            "description": "Application management and configuration",
+        },
+        {
+            "name": "destinations",
+            "description": "Webhook destination configuration and testing",
+        },
+        {
+            "name": "analytics",
+            "description": "Webhook analytics and statistics",
+        },
+        {
+            "name": "api-keys",
+            "description": "API key management",
+        },
+        {
+            "name": "dead-letter-queue",
+            "description": "Failed delivery management",
+        },
+        {
+            "name": "health",
+            "description": "Health check and monitoring endpoints",
+        },
+        {
+            "name": "metrics",
+            "description": "Prometheus metrics endpoint",
+        },
+    ],
 )
 
 # CORS middleware
@@ -128,6 +215,7 @@ app.include_router(analytics_router, prefix=settings.api_prefix)
 app.include_router(api_keys_router, prefix=settings.api_prefix)
 app.include_router(events_router, prefix=settings.api_prefix)
 app.include_router(auth_router, prefix=settings.api_prefix)
+app.include_router(users_router, prefix=settings.api_prefix)
 
 
 # Exception handlers
