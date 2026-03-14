@@ -32,6 +32,20 @@ from hookflow.utils.signature import (
     WebhookSignatureError,
     generate_signature_headers,
 )
+from hookflow.utils.circuit_breaker import (
+    AsyncCircuitBreaker,
+    CircuitBreakerError,
+    get_circuit_breaker,
+)
+from hookflow.utils.observability import (
+    get_metrics,
+    DestinationHealth,
+)
+from hookflow.utils.validation import (
+    PayloadValidator,
+    PayloadTooLargeError,
+    PayloadValidationError,
+)
 from hookflow.services.rate_limit import RateLimitService, RateLimitExceededError
 
 
@@ -49,6 +63,16 @@ class WebhookService:
         source_ip: str | None = None,
     ) -> Webhook:
         """Receive and store a webhook event."""
+
+        # Validate payload size before any database operations
+        try:
+            payload_size = len(json.dumps(body).encode("utf-8"))
+            validator = PayloadValidator(max_size=app.max_payload_size if hasattr(app, 'max_payload_size') and app.max_payload_size else None)
+            validator.validate_size(payload_size)
+        except PayloadTooLargeError as e:
+            raise ValueError(f"Payload too large: {e}")
+        except PayloadValidationError as e:
+            raise ValueError(f"Payload validation failed: {e}")
 
         # Get app
         app = await self._get_app(app_id)
@@ -162,7 +186,7 @@ class WebhookService:
         webhook_id: str,
         destination_id: str,
     ) -> Delivery:
-        """Deliver webhook to a destination."""
+        """Deliver webhook to a destination with circuit breaker and observability."""
 
         webhook = await self._get_webhook(webhook_id)
         destination = await self._get_destination(destination_id)
@@ -175,6 +199,34 @@ class WebhookService:
         if not delivery:
             raise ValueError("No pending delivery found")
 
+        # Get circuit breaker for this destination
+        # Use destination URL as unique identifier for circuit breaker
+        circuit_breaker = get_circuit_breaker(
+            destination_id=str(destination.id),
+            failure_threshold=destination.max_retries or 5,
+            timeout_seconds=destination.retry_backoff_max_ms / 1000 if destination.retry_backoff_max_ms else 60,
+        )
+
+        # Check circuit breaker before attempting delivery
+        if not circuit_breaker.allow_request():
+            # Circuit is open - record failed delivery and skip actual request
+            delivery.status = "failed"
+            delivery.error_message = "Circuit breaker is OPEN - too many recent failures"
+
+            # Get metrics instance and record the skipped delivery
+            metrics = get_metrics()
+            metrics.record_delivery(
+                app_id=webhook.app_id,
+                destination_id=str(destination.id),
+                status="failed",
+                duration_ms=0,
+            )
+
+            await self.db.commit()
+            await self.db.refresh(delivery)
+            await self._check_webhook_completion(webhook_id)
+            return delivery
+
         # Create retry policy from destination config
         retry_policy = RetryPolicy(
             enabled=destination.retry_enabled,
@@ -183,17 +235,33 @@ class WebhookService:
             max_ms=destination.retry_backoff_max_ms,
         )
 
+        # Get metrics instance for observability
+        metrics = get_metrics()
+
         # Deliver based on type
         broadcaster = get_broadcaster()
         status_code = None
         exception_type = None
+        response_time_ms = 0
 
         try:
             result = await self._deliver_to_destination(webhook, destination)
             delivery.status = "success"
             delivery.response_status_code = result.get("status_code", 200)
             delivery.response_body = result.get("body", "")[:1000]
-            delivery.response_time_ms = result.get("response_time_ms", 0)
+            response_time_ms = result.get("response_time_ms", 0)
+            delivery.response_time_ms = response_time_ms
+
+            # Record success in circuit breaker
+            circuit_breaker.record_success()
+
+            # Record metrics
+            metrics.record_delivery(
+                app_id=webhook.app_id,
+                destination_id=str(destination.id),
+                status="success",
+                duration_ms=response_time_ms,
+            )
 
             # Publish delivery success event
             await broadcaster.publish(
@@ -203,7 +271,7 @@ class WebhookService:
                     "data": {
                         "webhook_id": str(webhook_id),
                         "destination_id": str(destination_id),
-                        "response_time_ms": result.get("response_time_ms", 0),
+                        "response_time_ms": response_time_ms,
                     },
                 },
             )
@@ -212,6 +280,17 @@ class WebhookService:
             exception_type = type(e).__name__
             delivery.status = "failed"
             delivery.error_message = str(e)
+
+            # Record failure in circuit breaker
+            circuit_breaker.record_failure(e)
+
+            # Record metrics (use 0 or estimated response time)
+            metrics.record_delivery(
+                app_id=webhook.app_id,
+                destination_id=str(destination.id),
+                status="failed",
+                duration_ms=response_time_ms,
+            )
 
             # Publish delivery failed event
             await broadcaster.publish(
