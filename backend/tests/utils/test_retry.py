@@ -1,6 +1,6 @@
 """Tests for retry utilities."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 
 import pytest
 
@@ -88,7 +88,7 @@ class TestCalculateBackoff:
     def test_exponential_backoff(self):
         """Test exponential backoff calculation."""
         # base=1000ms: 1s, 2s, 4s, 8s, 16s, 32s, 64s (capped at 60s)
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         result1 = calculate_backoff(1, base_ms=1000, max_ms=60000)
         delay1 = (result1 - now).total_seconds()
@@ -104,7 +104,7 @@ class TestCalculateBackoff:
 
     def test_max_backoff_cap(self):
         """Test that backoff is capped at max_ms."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         result = calculate_backoff(10, base_ms=1000, max_ms=60000)
         delay = (result - now).total_seconds()
@@ -113,7 +113,7 @@ class TestCalculateBackoff:
 
     def test_jitter_is_added(self):
         """Test that jitter is added to backoff."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         # Multiple calls should give different results due to jitter
         results = [
@@ -126,7 +126,7 @@ class TestCalculateBackoff:
 
     def test_zero_jitter(self):
         """Test backoff with zero jitter."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         result = calculate_backoff(1, base_ms=1000, jitter_ms=0)
         delay = (result - now).total_seconds()
@@ -140,7 +140,7 @@ class TestCalculateBackoffWithRetryAfter:
 
     def test_respects_retry_after_header(self):
         """Test that Retry-After header is respected."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         result = calculate_backoff_with_retry_after("60", 1)
         delay = (result - now).total_seconds()
@@ -150,7 +150,7 @@ class TestCalculateBackoffWithRetryAfter:
 
     def test_invalid_retry_after_falls_back_to_exponential(self):
         """Test that invalid Retry-After falls back to exponential."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         result = calculate_backoff_with_retry_after("invalid-date", 1, base_ms=1000)
         delay = (result - now).total_seconds()
@@ -160,7 +160,7 @@ class TestCalculateBackoffWithRetryAfter:
 
     def test_none_retry_after_uses_exponential(self):
         """Test that None Retry-After uses exponential backoff."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         result = calculate_backoff_with_retry_after(None, 2, base_ms=1000)
         delay = (result - now).total_seconds()
@@ -223,7 +223,7 @@ class TestRetryPolicy:
     def test_calculate_next_retry(self):
         """Test RetryPolicy.calculate_next_retry method."""
         policy = RetryPolicy(base_ms=1000, max_ms=60000)
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         result = policy.calculate_next_retry(2)
         delay = (result - now).total_seconds()

@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from hookflow.services.analytics import AnalyticsService
 from hookflow.models.app import App, Webhook, Delivery
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,7 +42,7 @@ async def test_get_analytics_with_webhooks(db_session: AsyncSession):
     await db_session.refresh(app)
 
     # Create test webhooks
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
 
     # Success webhook
     webhook1 = Webhook(

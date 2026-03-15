@@ -1,6 +1,6 @@
 """Analytics service for webhook statistics."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from sqlalchemy import case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.types import Float
@@ -31,7 +31,7 @@ class AnalyticsService:
             AnalyticsResponse with aggregated statistics
         """
         # Calculate time range
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         if period == "24h":
             start_time = now - timedelta(hours=24)
             bucket = "hour"

@@ -1,6 +1,6 @@
 import pytest
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from hookflow.services.api_key import ApiKeyService
 from hookflow.models.app import App, ApiKey
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,7 +49,7 @@ async def test_create_api_key_with_expiration(db_session: AsyncSession):
     await db_session.refresh(app)
 
     service = ApiKeyService(db_session)
-    expires_at = datetime.utcnow() + timedelta(days=30)
+    expires_at = datetime.now(UTC) + timedelta(days=30)
     
     api_key, plain_key = await service.create_api_key(
         app_id=app.id,

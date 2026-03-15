@@ -3,7 +3,7 @@
 import asyncio
 import json
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Any
 
 from hookflow.core.config import settings
@@ -65,7 +65,7 @@ class InMemoryQueue:
     # Rate limiting
     async def incr_limit(self, key: str, limit: int, window: int) -> tuple[bool, int]:
         """Check and increment rate limit counter."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         if key in self.rate_limits:
             count, reset_time = self.rate_limits[key]
@@ -95,7 +95,7 @@ class InMemoryQueue:
             "webhook_id": webhook_id,
             "error": error,
             "payload": payload,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         self.dead_letters[key].append(value)

@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field, HttpUrl, field_serializer, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_serializer, field_validator
 
 
 class WebhookStatus(str, Enum):
@@ -59,8 +59,7 @@ class WebhookHeaders(BaseModel):
     x_webhook_signature: str | None = Field(default=None, alias="x-webhook-signature")
     x_idempotency_key: str | None = Field(default=None, alias="x-idempotency-key")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class AppCreate(BaseModel):
@@ -171,8 +170,7 @@ class WebhookResponse(BaseModel):
         """Convert enum to string."""
         return value.value if isinstance(value, WebhookStatus) else str(value)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DeliveryResponse(BaseModel):
@@ -187,8 +185,7 @@ class DeliveryResponse(BaseModel):
     error_message: str | None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DestinationResponse(BaseModel):
@@ -203,8 +200,7 @@ class DestinationResponse(BaseModel):
     updated_at: datetime
 
     # Config is excluded for security (may contain secrets)
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AppResponse(BaseModel):
@@ -221,8 +217,7 @@ class AppResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AppListResponse(BaseModel):
@@ -236,8 +231,7 @@ class AppListResponse(BaseModel):
     is_active: bool
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WebhookDetailResponse(BaseModel):
@@ -264,8 +258,7 @@ class WebhookDetailResponse(BaseModel):
                 return {}
         return value
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Error schemas

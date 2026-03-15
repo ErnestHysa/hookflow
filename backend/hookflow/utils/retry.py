@@ -1,7 +1,7 @@
 """Retry utilities for webhook delivery."""
 
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Any
 
 
@@ -77,7 +77,7 @@ def calculate_backoff(
 
     total_delay_ms = exponential_delay + jitter
 
-    return datetime.utcnow() + timedelta(milliseconds=total_delay_ms)
+    return datetime.now(UTC) + timedelta(milliseconds=total_delay_ms)
 
 
 def calculate_backoff_with_retry_after(
@@ -103,7 +103,7 @@ def calculate_backoff_with_retry_after(
         try:
             # Try parsing as seconds (most common)
             seconds = int(retry_after_header)
-            return datetime.utcnow() + timedelta(seconds=seconds)
+            return datetime.now(UTC) + timedelta(seconds=seconds)
         except ValueError:
             # Could be an HTTP-date; for simplicity, fall through to exponential
             pass

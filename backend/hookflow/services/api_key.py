@@ -2,7 +2,7 @@
 
 import hashlib
 import secrets
-from datetime import datetime
+from datetime import datetime, UTC
 from uuid import UUID
 
 from sqlalchemy import select
@@ -97,11 +97,11 @@ class ApiKeyService:
 
         if api_key:
             # Check expiration
-            if api_key.expires_at and api_key.expires_at < datetime.utcnow():
+            if api_key.expires_at and api_key.expires_at < datetime.now(UTC):
                 return None
 
             # Update last used
-            api_key.last_used_at = datetime.utcnow()
+            api_key.last_used_at = datetime.now(UTC)
             await self.db.commit()
 
         return api_key

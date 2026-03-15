@@ -5,7 +5,7 @@ import hmac
 import json
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select
@@ -519,7 +519,7 @@ class WebhookService:
     ) -> None:
         """Enqueue delivery for retry at a specific time."""
         # Calculate delay in seconds for the queue
-        delay_seconds = max(0, int((retry_after - datetime.utcnow()).total_seconds()))
+        delay_seconds = max(0, int((retry_after - datetime.now(UTC)).total_seconds()))
 
         await queue_client.enqueue(
             "webhook:retry",

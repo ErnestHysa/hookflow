@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, UTC
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -83,7 +83,7 @@ class RetryWorker:
         """
         async with async_session_factory() as db:
             # Find deliveries ready for retry
-            now = datetime.utcnow()
+            now = datetime.now(UTC)
 
             # Get deliveries that are retrying and due
             result = await db.execute(
